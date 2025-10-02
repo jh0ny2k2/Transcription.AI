@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { transcribeAudioFileFree } from '../lib/audioTranscription';
 import { supabase } from '../lib/supabase';
+import { subscriptionService } from '../lib/subscriptionService';
+import { useAuth } from '../hooks/useAuth';
 
 const TranscriptionProgress = ({ 
   audioFile, 
@@ -9,6 +11,7 @@ const TranscriptionProgress = ({
   onCancel,
   transcriptionId 
 }) => {
+  const { user } = useAuth();
   const [progress, setProgress] = useState(0);
   const [currentText, setCurrentText] = useState('');
   const [isProcessing, setIsProcessing] = useState(true);
@@ -95,6 +98,17 @@ const TranscriptionProgress = ({
               status: 'completed'
             })
             .eq('id', transcriptionId);
+
+          // Registrar el uso de la transcripción
+          if (user?.id) {
+            try {
+              await subscriptionService.recordTranscriptionUsage(user.id, transcriptionId);
+              console.log('✅ Uso de transcripción registrado correctamente');
+            } catch (usageError) {
+              console.error('❌ Error al registrar uso de transcripción:', usageError);
+              // No fallar la transcripción por este error, solo registrarlo
+            }
+          }
         }
 
         setProgress(100);

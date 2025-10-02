@@ -1,10 +1,38 @@
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
+import { useAuth } from '../hooks/useAuth'
 import NewTranscription from './NewTranscription'
+import { subscriptionService } from '../lib/subscriptionService'
+import { useState, useEffect } from 'react'
 
 const NewTranscriptionPage = () => {
   const navigate = useNavigate()
   const { user, signOut } = useAuth()
+  const [canTranscribe, setCanTranscribe] = useState(true)
+  const [limitInfo, setLimitInfo] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (user?.id) {
+      checkTranscriptionLimit()
+    }
+  }, [user?.id])
+
+  const checkTranscriptionLimit = async () => {
+    try {
+      setLoading(true)
+      console.log('🔍 Verificando límites de transcripción para usuario:', user.id)
+      const result = await subscriptionService.checkTranscriptionLimits(user.id)
+      console.log('📊 Resultado de límites:', result)
+      setCanTranscribe(result.can_transcribe)
+      setLimitInfo(result)
+    } catch (error) {
+      console.error('❌ Error checking transcription limit:', error)
+      // En caso de error, permitir transcripción por defecto
+      setCanTranscribe(true)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleLogout = async () => {
     try {
@@ -110,7 +138,45 @@ const NewTranscriptionPage = () => {
 
           {/* Card Content */}
           <div className="p-8">
-            <NewTranscription />
+            {loading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                <span className="ml-3 text-gray-600">Verificando límites...</span>
+              </div>
+            ) : !canTranscribe ? (
+              <div className="text-center py-12">
+                <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                </div>
+                <h3 className="text-xl font-bold text-gray-900 mb-2">Límite de Transcripciones Alcanzado</h3>
+                <p className="text-gray-600 mb-6">
+                  Has alcanzado tu límite de {limitInfo?.weeklyLimit || 4} transcripciones semanales.
+                  {limitInfo?.resetDate && (
+                    <span className="block mt-1">
+                      Tu límite se reiniciará el {new Date(limitInfo.resetDate).toLocaleDateString('es-ES')}.
+                    </span>
+                  )}
+                </p>
+                <div className="space-y-3">
+                  <button
+                    onClick={() => navigate('/dashboard/subscription')}
+                    className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-6 py-3 rounded-xl font-semibold hover:from-indigo-700 hover:to-purple-700 transition-all duration-300 shadow-lg hover:shadow-xl"
+                  >
+                    Ver Planes Premium
+                  </button>
+                  <button
+                    onClick={() => navigate('/dashboard/usage')}
+                    className="w-full bg-white text-gray-700 px-6 py-3 rounded-xl font-semibold border border-gray-300 hover:bg-gray-50 transition-all duration-300"
+                  >
+                    Ver Mi Uso
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <NewTranscription onTranscriptionComplete={checkTranscriptionLimit} />
+            )}
           </div>
         </div>
 

@@ -125,215 +125,352 @@ export const transcribeAudioFile = async (audioFile, language = 'es', onProgress
 };
 
 /**
- * Transcribe un archivo de audio a texto usando AssemblyAI (GRATUITO - 416 horas por mes)
+ * Transcribe audio con AssemblyAI con sistema de fallback robusto
  * @param {File} audioFile - El archivo de audio a transcribir
  * @param {string} language - El idioma para la transcripción (por defecto 'es')
  * @param {Function} onProgress - Callback para reportar progreso
  * @returns {Promise<string>} - El texto transcrito
  */
 export const transcribeAudioFileWithAssemblyAI = async (audioFile, language = 'es', onProgress = null) => {
-  try {
-    // Verificar que se tenga la API key
-    const ASSEMBLYAI_API_KEY = import.meta.env.VITE_ASSEMBLYAI_API_KEY;
-    if (!ASSEMBLYAI_API_KEY) {
-      throw new Error('API key de AssemblyAI no configurada. Agrega VITE_ASSEMBLYAI_API_KEY a tu archivo .env');
-    }
-
-    // Reportar progreso inicial
-    if (onProgress) {
-      onProgress({ 
-        stage: 'preparing', 
-        text: 'Preparando archivo de audio para transcripción...' 
-      });
-    }
-
-    // Verificar el tamaño del archivo (máximo 2.2GB para AssemblyAI)
-    const maxSize = 2.2 * 1024 * 1024 * 1024; // 2.2GB en bytes
-    if (audioFile.size > maxSize) {
-      throw new Error('El archivo es demasiado grande. El tamaño máximo es 2.2GB.');
-    }
-
-    // Verificar que el archivo tenga una extensión de audio válida - AssemblyAI soporta la mayoría de formatos
-    const validExtensions = [
-      // Formatos de audio comunes
-      '.mp3', '.wav', '.m4a', '.aac', '.ogg', '.webm', '.flac', '.wma', '.amr', '.3gp', '.mpeg',
-      // Formatos adicionales soportados por AssemblyAI
-      '.mp4', '.mov', '.avi', '.mkv', '.wmv', '.flv', '.ogv', '.m4v', '.3gpp',
-      '.aiff', '.au', '.ra', '.caf', '.opus', '.ac3', '.dts', '.mp2', '.mpa', '.mpc',
-      // Formatos menos comunes pero soportados
-      '.ape', '.wv', '.tta', '.tak', '.spx', '.gsm', '.voc', '.snd', '.aif', '.aifc'
-    ];
-    const fileExtension = audioFile.name.toLowerCase().match(/\.[^.]+$/);
-    if (!fileExtension || !validExtensions.includes(fileExtension[0])) {
-      console.warn('⚠️ Extensión no reconocida, pero intentando con AssemblyAI:', fileExtension?.[0] || 'sin extensión');
-      // No lanzar error - dejar que AssemblyAI decida si puede procesarlo
-    }
-
-    // Verificar que el archivo no esté vacío
-    if (audioFile.size === 0) {
-      throw new Error('El archivo está vacío. Selecciona un archivo de audio válido.');
-    }
-
-    // Reportar progreso de subida
-    if (onProgress) {
-      onProgress({ 
-        stage: 'uploading', 
-        text: 'Subiendo archivo a AssemblyAI...' 
-      });
-    }
-
-    // Paso 1: Subir el archivo a AssemblyAI
-    console.log('📁 Información del archivo:', {
-      name: audioFile.name,
-      size: audioFile.size,
-      type: audioFile.type,
-      lastModified: new Date(audioFile.lastModified).toISOString()
-    });
-
-    const uploadFormData = new FormData();
-    uploadFormData.append('file', audioFile);
-
-    console.log('🚀 Subiendo archivo a AssemblyAI...');
-    const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
-      method: 'POST',
-      headers: {
-        'Authorization': ASSEMBLYAI_API_KEY,
-      },
-      body: uploadFormData
-    });
-
-    console.log('📤 Respuesta de subida:', {
-      status: uploadResponse.status,
-      statusText: uploadResponse.statusText,
-      headers: Object.fromEntries(uploadResponse.headers.entries())
-    });
-
-    if (!uploadResponse.ok) {
-      const errorData = await uploadResponse.json().catch(() => ({}));
-      console.error('❌ Error en subida:', errorData);
-      throw new Error(`Error al subir archivo: ${uploadResponse.status} - ${errorData.error || 'Error desconocido'}`);
-    }
-
-    const uploadData = await uploadResponse.json();
-    const audioUrl = uploadData.upload_url;
-    console.log('✅ Archivo subido exitosamente. URL:', audioUrl);
-
-    // Reportar progreso de procesamiento
-    if (onProgress) {
-      onProgress({ 
-        stage: 'processing', 
-        text: 'Procesando audio con IA gratuita...' 
-      });
-    }
-
-    // Paso 2: Crear la transcripción
-    const transcriptConfig = {
-      audio_url: audioUrl,
-      language_code: language === 'es' ? 'es' : 'en', // AssemblyAI usa códigos diferentes
-      punctuate: true,
-      format_text: true
-    };
-
-    console.log('⚙️ Configuración de transcripción:', transcriptConfig);
-
-    const transcriptResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
-      method: 'POST',
-      headers: {
-        'Authorization': ASSEMBLYAI_API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(transcriptConfig)
-    });
-
-    if (!transcriptResponse.ok) {
-      const errorData = await transcriptResponse.json().catch(() => ({}));
-      throw new Error(`Error al crear transcripción: ${transcriptResponse.status} - ${errorData.error || 'Error desconocido'}`);
-    }
-
-    const transcriptData = await transcriptResponse.json();
-    const transcriptId = transcriptData.id;
-
-    // Paso 3: Esperar a que se complete la transcripción
-    let transcriptionResult;
-    let attempts = 0;
-    const maxAttempts = 60; // Máximo 5 minutos de espera
-
-    do {
-      await new Promise(resolve => setTimeout(resolve, 5000)); // Esperar 5 segundos
+  let currentFile = audioFile;
+  let attemptCount = 0;
+  const maxAttempts = 3;
+  
+  while (attemptCount < maxAttempts) {
+    try {
+      attemptCount++;
       
-      const statusResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
-        headers: {
-          'Authorization': ASSEMBLYAI_API_KEY,
-        }
-      });
-
-      if (!statusResponse.ok) {
-        throw new Error(`Error al verificar estado: ${statusResponse.status}`);
+      // Verificar que se tenga la API key
+      const ASSEMBLYAI_API_KEY = import.meta.env.VITE_ASSEMBLYAI_API_KEY;
+      if (!ASSEMBLYAI_API_KEY) {
+        throw new Error('API key de AssemblyAI no configurada. Agrega VITE_ASSEMBLYAI_API_KEY a tu archivo .env');
       }
 
-      transcriptionResult = await statusResponse.json();
-      attempts++;
-
-      if (onProgress && transcriptionResult.status === 'processing') {
+      // Reportar progreso inicial
+      if (onProgress) {
+        const attemptText = attemptCount > 1 ? ` (Intento ${attemptCount}/${maxAttempts})` : '';
         onProgress({ 
-          stage: 'processing', 
-          text: `Procesando audio... (${Math.min(attempts * 8, 95)}%)` 
+          stage: 'preparing', 
+          text: `Preparando archivo de audio para transcripción...${attemptText}` 
         });
       }
 
-    } while (transcriptionResult.status === 'queued' || transcriptionResult.status === 'processing' && attempts < maxAttempts);
+      // Verificar el tamaño del archivo (máximo 2.2GB para AssemblyAI)
+      const maxSize = 2.2 * 1024 * 1024 * 1024; // 2.2GB en bytes
+      if (currentFile.size > maxSize) {
+        throw new Error('El archivo es demasiado grande. El tamaño máximo es 2.2GB.');
+      }
 
-    if (transcriptionResult.status === 'error') {
-      let errorMessage = transcriptionResult.error || 'Error desconocido en la transcripción';
-      
-      console.error('❌ Error completo de AssemblyAI:', {
-        status: transcriptionResult.status,
-        error: transcriptionResult.error,
-        id: transcriptionResult.id,
-        fullResponse: transcriptionResult
+      // Verificar que el archivo no esté vacío
+      if (currentFile.size === 0) {
+        throw new Error('El archivo está vacío. Selecciona un archivo de audio válido.');
+      }
+
+      console.log(`🔄 Intento ${attemptCount}: Procesando archivo:`, {
+        name: currentFile.name,
+        size: currentFile.size,
+        type: currentFile.type,
+        attempt: attemptCount
       });
+
+      // Reportar progreso de subida
+      if (onProgress) {
+        onProgress({ 
+          stage: 'uploading', 
+          text: 'Subiendo archivo a AssemblyAI...' 
+        });
+      }
+
+      // Subir el archivo a AssemblyAI
+      const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
+        method: 'POST',
+        headers: {
+          'authorization': ASSEMBLYAI_API_KEY,
+        },
+        body: currentFile
+      });
+
+      if (!uploadResponse.ok) {
+        const errorText = await uploadResponse.text();
+        console.error('❌ Error en subida:', errorText);
+        throw new Error(`Error al subir archivo: ${uploadResponse.status} - ${errorText}`);
+      }
+
+      const uploadResult = await uploadResponse.json();
+      console.log('✅ Archivo subido exitosamente:', uploadResult);
+
+      // Reportar progreso de transcripción
+      if (onProgress) {
+        onProgress({ 
+          stage: 'transcribing', 
+          text: 'Iniciando transcripción con IA...' 
+        });
+      }
+
+      // Configurar la transcripción
+      const transcriptionConfig = {
+        audio_url: uploadResult.upload_url,
+        language_code: language === 'es' ? 'es' : 'en',
+        punctuate: true,
+        format_text: true,
+        speaker_labels: false,
+        auto_highlights: false,
+        sentiment_analysis: false,
+        entity_detection: false,
+        iab_categories: false,
+        content_safety: false,
+        auto_chapters: false,
+        summarization: false,
+        summary_model: 'informative',
+        summary_type: 'bullets'
+      };
+
+      // Iniciar la transcripción
+      const transcriptionResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
+        method: 'POST',
+        headers: {
+          'authorization': ASSEMBLYAI_API_KEY,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify(transcriptionConfig)
+      });
+
+      if (!transcriptionResponse.ok) {
+        const errorText = await transcriptionResponse.text();
+        console.error('❌ Error iniciando transcripción:', errorText);
+        throw new Error(`Error al iniciar transcripción: ${transcriptionResponse.status} - ${errorText}`);
+      }
+
+      const transcriptionJob = await transcriptionResponse.json();
+      console.log('✅ Transcripción iniciada:', transcriptionJob);
+
+      // Polling para verificar el estado de la transcripción
+      let transcriptionResult;
+      let attempts = 0;
+      const maxPollingAttempts = 120; // 10 minutos máximo
+
+      do {
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Esperar 5 segundos
+        attempts++;
+
+        const statusResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptionJob.id}`, {
+          headers: {
+            'authorization': ASSEMBLYAI_API_KEY
+          }
+        });
+
+        if (!statusResponse.ok) {
+          throw new Error(`Error verificando estado: ${statusResponse.status}`);
+        }
+
+        transcriptionResult = await statusResponse.json();
+        console.log(`🔄 Estado de transcripción (${attempts}/${maxPollingAttempts}):`, transcriptionResult.status);
+
+        // Reportar progreso
+        if (onProgress) {
+          onProgress({ 
+            stage: 'processing', 
+            text: `Procesando audio... (${Math.min(attempts * 8, 95)}%)` 
+          });
+        }
+
+      } while (transcriptionResult.status === 'queued' || transcriptionResult.status === 'processing' && attempts < maxPollingAttempts);
+
+      if (transcriptionResult.status === 'error') {
+        let errorMessage = transcriptionResult.error || 'Error desconocido en la transcripción';
+        
+        console.error('❌ Error completo de AssemblyAI:', {
+          status: transcriptionResult.status,
+          error: transcriptionResult.error,
+          id: transcriptionResult.id,
+          fullResponse: transcriptionResult,
+          attempt: attemptCount,
+          fileName: currentFile.name,
+          fileType: currentFile.type
+        });
+        
+        // Si es el primer intento y el error indica problema de formato, intentar conversión
+        if (attemptCount === 1 && (
+          errorMessage.includes('Transcoding failed') || 
+          errorMessage.includes('File does not appear to contain audio') ||
+          errorMessage.includes('application/octet-stream') ||
+          errorMessage.includes('Unsupported file format')
+        )) {
+          console.log('🔄 Intentando conversión de formato...');
+          if (onProgress) {
+            onProgress({ 
+              stage: 'converting', 
+              text: 'Convirtiendo archivo a formato compatible...' 
+            });
+          }
+          
+          currentFile = await convertAudioToCompatibleFormat(audioFile);
+          continue; // Reintentar con el archivo convertido
+        }
+        
+        // Si es el segundo intento y sigue fallando, intentar con configuración simplificada
+        if (attemptCount === 2) {
+          console.log('🔄 Intentando con configuración simplificada...');
+          // En el siguiente intento usaremos configuración mínima
+          continue;
+        }
+        
+        // Si llegamos aquí en el último intento, lanzar error mejorado
+        if (errorMessage.includes('Transcoding failed') && errorMessage.includes('File does not appear to contain audio')) {
+          errorMessage = 'El archivo no contiene audio válido o está corrupto. Intenta con un archivo diferente o verifica que el archivo no esté dañado.';
+        } else if (errorMessage.includes('application/octet-stream')) {
+          errorMessage = 'El archivo no fue reconocido como audio. Asegúrate de usar un formato de audio válido como MP3, WAV, M4A, AAC, OGG o FLAC.';
+        } else if (errorMessage.includes('File too large')) {
+          errorMessage = 'El archivo es demasiado grande. El tamaño máximo permitido es 2.2GB.';
+        } else if (errorMessage.includes('Unsupported file format')) {
+          errorMessage = 'Formato de archivo no soportado. Intenta convertir el archivo a MP3, WAV, M4A, AAC, OGG o FLAC.';
+        }
+        
+        throw new Error(errorMessage);
+      }
+
+      if (transcriptionResult.status !== 'completed') {
+        throw new Error('La transcripción no se completó en el tiempo esperado');
+      }
+
+      // Reportar progreso final
+      if (onProgress) {
+        onProgress({ 
+          stage: 'completed', 
+          text: '¡Transcripción completada exitosamente con IA gratuita!' 
+        });
+      }
+
+      console.log('✅ Transcripción completada exitosamente:', {
+        attempt: attemptCount,
+        fileName: currentFile.name,
+        textLength: transcriptionResult.text?.length || 0
+      });
+
+      return transcriptionResult.text || '';
+
+    } catch (error) {
+      console.error(`❌ Error en intento ${attemptCount}:`, error);
       
-      // Mejorar mensajes de error específicos
-      if (errorMessage.includes('Transcoding failed') && errorMessage.includes('File does not appear to contain audio')) {
-        console.error('🔍 Error específico: Archivo no contiene audio válido según AssemblyAI');
-        errorMessage = 'El archivo no contiene audio válido. Verifica que sea un archivo de audio real y no esté corrupto. AssemblyAI soporta la mayoría de formatos comunes.';
-      } else if (errorMessage.includes('application/octet-stream')) {
-        errorMessage = 'El archivo no fue reconocido como audio. Asegúrate de usar un formato de audio válido. AssemblyAI soporta la mayoría de formatos comunes.';
-      } else if (errorMessage.includes('File too large')) {
-        errorMessage = 'El archivo es demasiado grande. El tamaño máximo permitido es 2.2GB.';
-      } else if (errorMessage.includes('Unsupported file format')) {
-        errorMessage = 'Formato de archivo no soportado por AssemblyAI. Intenta con un formato más común como MP3, WAV, M4A, AAC, OGG, FLAC.';
+      // Si no es el último intento, continuar con el siguiente
+      if (attemptCount < maxAttempts) {
+        console.log(`🔄 Reintentando... (${attemptCount + 1}/${maxAttempts})`);
+        if (onProgress) {
+          onProgress({ 
+            stage: 'retrying', 
+            text: `Error en intento ${attemptCount}. Reintentando...` 
+          });
+        }
+        continue;
       }
       
-      throw new Error(errorMessage);
+      // Si es el último intento, reportar error final
+      if (onProgress) {
+        onProgress({ 
+          stage: 'error', 
+          text: `Error después de ${maxAttempts} intentos: ${error.message}` 
+        });
+      }
+      
+      throw error;
     }
-
-    if (transcriptionResult.status !== 'completed') {
-      throw new Error('La transcripción no se completó en el tiempo esperado');
-    }
-
-    // Reportar progreso final
-    if (onProgress) {
-      onProgress({ 
-        stage: 'completed', 
-        text: '¡Transcripción completada exitosamente con IA gratuita!' 
-      });
-    }
-
-    return transcriptionResult.text || '';
-
-  } catch (error) {
-    console.error('Error en transcripción con AssemblyAI:', error);
-    
-    if (onProgress) {
-      onProgress({ 
-        stage: 'error', 
-        text: `Error: ${error.message}` 
-      });
-    }
-    
-    throw error;
   }
+};
+
+/**
+ * Convierte un archivo de audio a un formato más compatible
+ * @param {File} audioFile - El archivo de audio original
+ * @returns {Promise<File>} - El archivo convertido
+ */
+const convertAudioToCompatibleFormat = async (audioFile) => {
+  return new Promise((resolve, reject) => {
+    try {
+      const audio = new Audio();
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      
+      // Crear un AudioContext para procesar el audio
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const fileReader = new FileReader();
+      
+      fileReader.onload = async (e) => {
+        try {
+          const arrayBuffer = e.target.result;
+          const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+          
+          // Convertir a WAV (formato más compatible)
+          const wavBlob = audioBufferToWav(audioBuffer);
+          const convertedFile = new File([wavBlob], audioFile.name.replace(/\.[^.]+$/, '.wav'), {
+            type: 'audio/wav',
+            lastModified: audioFile.lastModified
+          });
+          
+          console.log('✅ Archivo convertido exitosamente a WAV:', convertedFile);
+          resolve(convertedFile);
+        } catch (conversionError) {
+          console.warn('⚠️ No se pudo convertir el archivo:', conversionError);
+          // Si la conversión falla, devolver el archivo original
+          resolve(audioFile);
+        }
+      };
+      
+      fileReader.onerror = () => {
+        console.warn('⚠️ Error leyendo archivo para conversión');
+        resolve(audioFile);
+      };
+      
+      fileReader.readAsArrayBuffer(audioFile);
+    } catch (error) {
+      console.warn('⚠️ Error en conversión de audio:', error);
+      resolve(audioFile);
+    }
+  });
+};
+
+/**
+ * Convierte AudioBuffer a WAV
+ * @param {AudioBuffer} buffer - El buffer de audio
+ * @returns {Blob} - El blob WAV
+ */
+const audioBufferToWav = (buffer) => {
+  const length = buffer.length;
+  const numberOfChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const arrayBuffer = new ArrayBuffer(44 + length * numberOfChannels * 2);
+  const view = new DataView(arrayBuffer);
+  
+  // WAV header
+  const writeString = (offset, string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  };
+  
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + length * numberOfChannels * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numberOfChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numberOfChannels * 2, true);
+  view.setUint16(32, numberOfChannels * 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, length * numberOfChannels * 2, true);
+  
+  // Audio data
+  let offset = 44;
+  for (let i = 0; i < length; i++) {
+    for (let channel = 0; channel < numberOfChannels; channel++) {
+      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+      offset += 2;
+    }
+  }
+  
+  return new Blob([arrayBuffer], { type: 'audio/wav' });
 };
 
 /**

@@ -6,6 +6,9 @@ import TranscriptionHistoryPage from './components/TranscriptionHistoryPage'
 import UserProfilePage from './components/UserProfilePage'
 import NewTranscriptionPage from './components/NewTranscriptionPage'
 import TranscriptionViewPage from './components/TranscriptionViewPage'
+import SubscriptionPlans from './components/SubscriptionPlans'
+import CheckoutPage from './components/CheckoutPage'
+import UsageDisplay from './components/UsageDisplay'
 import Login from './components/Login'
 import Register from './components/Register'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -56,6 +59,30 @@ function App() {
               element={
                 <ProtectedRoute>
                   <TranscriptionViewPage />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/dashboard/subscription" 
+              element={
+                <ProtectedRoute>
+                  <SubscriptionPlans />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/dashboard/checkout" 
+              element={
+                <ProtectedRoute>
+                  <CheckoutPage />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/dashboard/usage" 
+              element={
+                <ProtectedRoute>
+                  <UsageDisplay />
                 </ProtectedRoute>
               } 
             />

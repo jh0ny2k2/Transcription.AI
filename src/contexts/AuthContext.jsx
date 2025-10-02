@@ -1,11 +1,7 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
-const AuthContext = createContext({})
-
-export const useAuth = () => {
-  return useContext(AuthContext)
-}
+export const AuthContext = createContext({})
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
@@ -13,21 +9,29 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    let mounted = true
+
     // Obtener sesión inicial
     const getInitialSession = async () => {
       try {
+        console.log('🔍 Obteniendo sesión inicial...')
         const { data: { session }, error } = await supabase.auth.getSession()
         
         if (error) {
-          console.error('Error obteniendo sesión inicial:', error)
+          console.error('❌ Error obteniendo sesión inicial:', error)
         }
         
-        setSession(session)
-        setUser(session?.user ?? null)
+        if (mounted) {
+          console.log('📋 Sesión inicial obtenida:', session?.user?.email || 'No hay usuario')
+          setSession(session)
+          setUser(session?.user ?? null)
+          setLoading(false)
+        }
       } catch (error) {
-        console.error('Error en getInitialSession:', error)
-      } finally {
-        setLoading(false)
+        console.error('💥 Error en getInitialSession:', error)
+        if (mounted) {
+          setLoading(false)
+        }
       }
     }
 
@@ -37,19 +41,84 @@ export const AuthProvider = ({ children }) => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         console.log('🔄 Auth state changed:', event, session?.user?.email)
-        setSession(session)
-        setUser(session?.user ?? null)
-        setLoading(false)
+        
+        if (mounted) {
+          setSession(session)
+          setUser(session?.user ?? null)
+          
+          // Si es un nuevo usuario (registro o primer login con Google), guardarlo en la base de datos
+          if (event === 'SIGNED_IN' && session?.user) {
+            await saveUserToDatabase(session.user)
+          }
+          
+          // Manejar específicamente el evento de logout
+          if (event === 'SIGNED_OUT') {
+            console.log('🚪 Usuario desconectado, limpiando estado...')
+            setSession(null)
+            setUser(null)
+          }
+          
+          // Solo establecer loading false si no estamos en medio de una operación manual
+          setLoading(false)
+        }
       }
     )
 
-    return () => subscription.unsubscribe()
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
   }, [])
+
+  // Función para guardar usuario en la base de datos
+  const saveUserToDatabase = async (user) => {
+    try {
+      console.log('💾 Guardando usuario en la base de datos:', user.email)
+      
+      // Verificar si el usuario ya existe
+      const { data: existingUser, error: checkError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('id', user.id)
+        .single()
+      
+      if (checkError && checkError.code !== 'PGRST116') {
+        console.error('❌ Error verificando usuario existente:', checkError)
+        return
+      }
+      
+      // Si el usuario no existe, crearlo
+      if (!existingUser) {
+        const userData = {
+          id: user.id,
+          email: user.email,
+          full_name: user.user_metadata?.full_name || user.user_metadata?.name || '',
+          avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || '',
+          provider: user.app_metadata?.provider || 'email',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }
+        
+        const { error: insertError } = await supabase
+          .from('users')
+          .insert([userData])
+        
+        if (insertError) {
+          console.error('❌ Error guardando usuario:', insertError)
+        } else {
+          console.log('✅ Usuario guardado exitosamente en la base de datos')
+        }
+      } else {
+        console.log('ℹ️ Usuario ya existe en la base de datos')
+      }
+    } catch (error) {
+      console.error('💥 Error en saveUserToDatabase:', error)
+    }
+  }
 
   // Función de registro
   const signUp = async (email, password, metadata = {}) => {
     try {
-      setLoading(true)
       console.log('🚀 Iniciando registro:', email)
       
       const { data, error } = await supabase.auth.signUp({
@@ -70,15 +139,12 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       console.error('💥 Error capturado en signUp:', error)
       return { error: { message: error.message } }
-    } finally {
-      setLoading(false)
     }
   }
 
   // Función de inicio de sesión
   const signIn = async (email, password) => {
     try {
-      setLoading(true)
       console.log('🚀 Iniciando login:', email)
       
       const { data, error } = await supabase.auth.signInWithPassword({
@@ -96,15 +162,12 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       console.error('💥 Error capturado en signIn:', error)
       return { error: { message: error.message } }
-    } finally {
-      setLoading(false)
     }
   }
 
   // Función de cierre de sesión
   const signOut = async () => {
     try {
-      setLoading(true)
       console.log('🚀 Cerrando sesión...')
       
       const { error } = await supabase.auth.signOut()
@@ -119,8 +182,6 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       console.error('💥 Error capturado en signOut:', error)
       return { error: { message: error.message } }
-    } finally {
-      setLoading(false)
     }
   }
 
@@ -166,6 +227,31 @@ export const AuthProvider = ({ children }) => {
     }
   }
 
+  // Función para autenticación con Google
+  const signInWithGoogle = async () => {
+    try {
+      console.log('🚀 Iniciando autenticación con Google...')
+      
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/dashboard`
+        }
+      })
+      
+      if (error) {
+        console.error('❌ Error en autenticación con Google:', error)
+        return { error }
+      }
+      
+      console.log('✅ Redirección a Google iniciada')
+      return { data, error: null }
+    } catch (error) {
+      console.error('💥 Error capturado en signInWithGoogle:', error)
+      return { error: { message: error.message } }
+    }
+  }
+
   const value = {
     user,
     session,
@@ -174,7 +260,8 @@ export const AuthProvider = ({ children }) => {
     signIn,
     signOut,
     resetPassword,
-    updateProfile
+    updateProfile,
+    signInWithGoogle
   }
 
   return (

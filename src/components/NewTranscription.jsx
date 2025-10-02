@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../lib/supabase';
 import TranscriptionProgress from './TranscriptionProgress';
 
@@ -68,39 +68,91 @@ const NewTranscription = () => {
       reader.onload = (e) => {
         const arr = new Uint8Array(e.target.result);
         let header = '';
-        for (let i = 0; i < Math.min(arr.length, 12); i++) {
+        for (let i = 0; i < Math.min(arr.length, 16); i++) {
           header += arr[i].toString(16).padStart(2, '0');
         }
         
-        // Magic numbers para diferentes formatos de audio
+        console.log('🔍 Magic numbers detectados:', header, 'para archivo:', file.name);
+        
+        // Magic numbers expandidos para diferentes formatos de audio
         const audioSignatures = {
-          'fffb': 'mp3',      // MP3
-          'fff3': 'mp3',      // MP3
-          'fff2': 'mp3',      // MP3
-          '494433': 'mp3',    // MP3 con ID3
+          // MP3 variants
+          'fffb': 'mp3',      // MP3 Layer III
+          'fff3': 'mp3',      // MP3 Layer III
+          'fff2': 'mp3',      // MP3 Layer II
+          'ffe3': 'mp3',      // MP3 Layer III
+          'ffe2': 'mp3',      // MP3 Layer II
+          '494433': 'mp3',    // MP3 con ID3v2
+          
+          // WAV/RIFF
           '52494646': 'wav',  // WAV (RIFF)
-          '66747970': 'm4a',  // M4A/MP4
+          '57415645': 'wav',  // WAV (WAVE)
+          
+          // MP4/M4A/AAC
+          '66747970': 'm4a',  // M4A/MP4 (ftyp)
+          '00000018667479704d344120': 'm4a', // M4A específico
+          '00000020667479704d344120': 'm4a', // M4A específico
+          
+          // OGG variants
           '4f676753': 'ogg',  // OGG
+          
+          // FLAC
           '664c6143': 'flac', // FLAC
-          '2321414d52': 'amr' // AMR
+          
+          // AMR
+          '2321414d52': 'amr', // AMR
+          
+          // AIFF
+          '464f524d': 'aiff', // AIFF (FORM)
+          
+          // WMA/ASF
+          '3026b2758e66cf11': 'wma', // WMA/ASF
+          
+          // WebM
+          '1a45dfa3': 'webm', // WebM/MKV
+          
+          // 3GP
+          '66747970336770': '3gp', // 3GP
+          
+          // Additional MP4 variants
+          '667479704d534e56': 'mp4', // MP4 MSNV
+          '66747970697361': 'mp4',   // MP4 isom
+          '667479706d703432': 'mp4', // MP4 mp42
+          '667479706d703431': 'mp4', // MP4 mp41
+          
+          // AAC
+          'fff1': 'aac',      // AAC ADTS
+          'fff9': 'aac',      // AAC ADTS
         };
         
         let detectedType = null;
         for (const [signature, type] of Object.entries(audioSignatures)) {
           if (header.toLowerCase().startsWith(signature.toLowerCase())) {
             detectedType = type;
+            console.log('✅ Tipo detectado por magic numbers:', type);
             break;
           }
         }
         
+        if (!detectedType) {
+          console.log('⚠️ No se detectó tipo por magic numbers para:', file.name);
+        }
+        
         resolve(detectedType);
       };
-      reader.readAsArrayBuffer(file.slice(0, 12));
+      reader.readAsArrayBuffer(file.slice(0, 16));
     });
   };
 
   // Función para validar archivos de audio
   const validateAudioFile = async (file) => {
+    console.log('🔍 Validando archivo:', {
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      lastModified: new Date(file.lastModified).toISOString()
+    });
+
     // Validar tamaño primero
     if (file.size > maxFileSize) {
       return {
@@ -131,26 +183,64 @@ const NewTranscription = () => {
     
     const hasValidExtension = fileExtension && supportedAudioFormats.includes(fileExtension[1]);
     
+    console.log('📁 Extensión del archivo:', fileExtension ? fileExtension[1] : 'sin extensión');
+    console.log('✅ Extensión válida:', hasValidExtension);
+    
     if (!hasValidExtension) {
+      console.log('❌ Extensión no soportada:', fileExtension ? fileExtension[1] : 'sin extensión');
       return {
         valid: false,
         error: 'Formato de archivo no reconocido. AssemblyAI soporta la mayoría de formatos de audio y video comunes. Si tu archivo es de audio, inténtalo de todas formas.'
       };
     }
 
-    // Validar por contenido (magic numbers) - solo como advertencia adicional
-    try {
-      const detectedType = await detectFileTypeByContent(file);
-      if (!detectedType && file.type === 'application/octet-stream') {
-        console.warn('Archivo no detectado por magic numbers, pero tiene extensión válida:', file.name);
-        // No rechazar el archivo, solo advertir - AssemblyAI puede manejarlo mejor
-      }
-    } catch (error) {
-      console.warn('No se pudo verificar el contenido del archivo:', error);
-      // Continuar con la validación si no se puede leer el contenido
+    // Validar tipo MIME si está disponible
+    const validMimeTypes = [
+      'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave', 'audio/x-wav',
+      'audio/aac', 'audio/mp4', 'audio/m4a', 'audio/ogg', 'audio/webm',
+      'audio/flac', 'audio/x-flac', 'audio/wma', 'audio/x-ms-wma',
+      'audio/amr', 'audio/3gpp', 'audio/aiff', 'audio/x-aiff',
+      'video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm',
+      'application/octet-stream' // Permitir archivos binarios genéricos
+    ];
+    
+    console.log('🎵 Tipo MIME:', file.type);
+    
+    if (file.type && !validMimeTypes.includes(file.type)) {
+      console.log('⚠️ Tipo MIME no reconocido, pero continuando con validación por contenido');
     }
 
-    return { valid: true };
+    // Validar por contenido (magic numbers) - mejorado
+    try {
+      const detectedType = await detectFileTypeByContent(file);
+      
+      if (!detectedType) {
+        console.log('⚠️ No se pudo detectar el tipo por magic numbers, pero el archivo tiene extensión válida');
+        // Si no se puede detectar por magic numbers pero tiene extensión válida, 
+        // permitir que AssemblyAI lo procese
+        if (hasValidExtension) {
+          console.log('✅ Archivo aceptado por extensión válida a pesar de magic numbers no detectados');
+          return { valid: true };
+        }
+      } else {
+        console.log('✅ Archivo validado exitosamente - tipo detectado:', detectedType);
+        return { valid: true };
+      }
+    } catch (error) {
+      console.warn('⚠️ Error al verificar el contenido del archivo:', error);
+      // Si hay error leyendo el contenido pero la extensión es válida, continuar
+      if (hasValidExtension) {
+        console.log('✅ Archivo aceptado por extensión válida a pesar del error en magic numbers');
+        return { valid: true };
+      }
+    }
+
+    // Si llegamos aquí, el archivo no pasó ninguna validación
+    console.log('❌ Archivo rechazado - no pasó validaciones');
+    return {
+      valid: false,
+      error: 'No se pudo validar el archivo como audio válido. Intenta con un formato más común como MP3, WAV, M4A, AAC.'
+    };
   };
 
   const handleFileChange = async (e) => {
@@ -517,18 +607,18 @@ const NewTranscription = () => {
   };
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="max-w-2xl mx-auto space-y-4 sm:space-y-6 px-4 sm:px-0">
       <div className="text-center">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Nueva Transcripción</h2>
-        <p className="text-gray-600">Sube un archivo de audio o graba directamente para transcribir</p>
+        <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2">Nueva Transcripción</h2>
+        <p className="text-sm sm:text-base text-gray-600">Sube un archivo de audio o graba directamente para transcribir</p>
       </div>
 
       {/* Method Selection */}
-      <div className="flex justify-center space-x-4">
+      <div className="flex flex-col sm:flex-row justify-center space-y-2 sm:space-y-0 sm:space-x-4">
         <button
           type="button"
           onClick={() => setTranscriptionMethod('upload')}
-          className={`px-4 py-2 rounded-md font-medium transition-colors ${
+          className={`px-4 py-2 rounded-md font-medium transition-colors text-sm sm:text-base ${
             transcriptionMethod === 'upload'
               ? 'bg-blue-600 text-white'
               : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
@@ -539,7 +629,7 @@ const NewTranscription = () => {
         <button
           type="button"
           onClick={() => setTranscriptionMethod('record')}
-          className={`px-4 py-2 rounded-md font-medium transition-colors ${
+          className={`px-4 py-2 rounded-md font-medium transition-colors text-sm sm:text-base ${
             transcriptionMethod === 'record'
               ? 'bg-blue-600 text-white'
               : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
@@ -551,21 +641,21 @@ const NewTranscription = () => {
 
       {/* Messages */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md">
+        <div className="bg-red-50 border border-red-200 text-red-700 px-3 sm:px-4 py-2 sm:py-3 rounded-md text-sm sm:text-base">
           {error}
         </div>
       )}
 
       {success && (
-        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-md">
+        <div className="bg-green-50 border border-green-200 text-green-700 px-3 sm:px-4 py-2 sm:py-3 rounded-md text-sm sm:text-base">
           {success}
         </div>
       )}
 
-      <form onSubmit={submitTranscription} className="space-y-6">
+      <form onSubmit={submitTranscription} className="space-y-4 sm:space-y-6">
         {/* Title */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2">
             Título de la Transcripción
           </label>
           <input
@@ -574,21 +664,21 @@ const NewTranscription = () => {
             value={transcriptionData.title}
             onChange={handleInputChange}
             placeholder="Ej: Reunión de equipo - 15 de enero"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm sm:text-base"
             required
           />
         </div>
 
         {/* Language */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2">
             Idioma del Audio
           </label>
           <select
             name="language"
             value={transcriptionData.language}
             onChange={handleInputChange}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm sm:text-base"
           >
             <option value="es">Español</option>
             <option value="en">English</option>
@@ -602,11 +692,11 @@ const NewTranscription = () => {
         {/* File Upload Method */}
         {transcriptionMethod === 'upload' && (
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2">
               Archivo de Audio
             </label>
             <div 
-              className={`border-2 border-dashed rounded-lg p-6 text-center transition-all duration-200 ${
+              className={`border-2 border-dashed rounded-lg p-4 sm:p-6 text-center transition-all duration-200 ${
                 isDragOver 
                   ? 'border-blue-400 bg-blue-50' 
                   : 'border-gray-300 hover:border-gray-400'
@@ -622,11 +712,11 @@ const NewTranscription = () => {
                 accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.webm,.flac,.wma,.amr,.3gp,.mpeg"
                 className="hidden"
               />
-              <div className="space-y-3">
-                <div className="text-4xl">
+              <div className="space-y-2 sm:space-y-3">
+                <div className="text-2xl sm:text-4xl">
                   {isDragOver ? '📥' : '🎵'}
                 </div>
-                <div>
+                <div className="text-sm sm:text-base">
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
@@ -634,11 +724,12 @@ const NewTranscription = () => {
                   >
                     Seleccionar archivo
                   </button>
-                  <span className="text-gray-500"> o arrastra y suelta aquí</span>
+                  <span className="text-gray-500 hidden sm:inline"> o arrastra y suelta aquí</span>
                 </div>
                 <div className="text-xs text-gray-500 space-y-1">
                   <p><strong>Formatos soportados:</strong></p>
-                  <p>MP3, WAV, M4A, AAC, OGG, WEBM, FLAC, WMA, AMR, 3GP, MPEG</p>
+                  <p className="hidden sm:block">MP3, WAV, M4A, AAC, OGG, WEBM, FLAC, WMA, AMR, 3GP, MPEG</p>
+                  <p className="sm:hidden">MP3, WAV, M4A, AAC, OGG</p>
                   <p><strong>Tamaño máximo:</strong> {Math.round(maxFileSize / (1024 * 1024))}MB</p>
                 </div>
                 
@@ -672,59 +763,65 @@ const NewTranscription = () => {
         {/* Recording Method */}
         {transcriptionMethod === 'record' && (
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2">
               Grabación de Audio
             </label>
-            <div className="border border-gray-300 rounded-lg p-6 text-center space-y-4">
-              <div className="text-4xl">🎤</div>
+            <div className="border border-gray-300 rounded-lg p-4 sm:p-6 text-center space-y-3 sm:space-y-4">
+              <div className="text-2xl sm:text-4xl">🎤</div>
               
               {!isRecording && !transcriptionData.audioFile && (
-                <div className="space-y-3">
+                <div className="space-y-2 sm:space-y-3">
                   <button
                     type="button"
                     onClick={startRecording}
-                    className="bg-red-600 hover:bg-red-700 text-white px-8 py-3 rounded-full font-medium transition-colors shadow-lg"
+                    className="bg-red-600 hover:bg-red-700 text-white px-6 sm:px-8 py-2 sm:py-3 rounded-full font-medium transition-colors shadow-lg text-sm sm:text-base"
                   >
                     🔴 Iniciar Grabación
                   </button>
                   <div className="text-xs text-gray-500 space-y-1">
                     <p><strong>Configuración de grabación:</strong></p>
-                    <p>• Calidad: Alta (44.1kHz)</p>
-                    <p>• Cancelación de eco activada</p>
-                    <p>• Supresión de ruido activada</p>
-                    <p>• Control automático de ganancia</p>
+                    <div className="hidden sm:block">
+                      <p>• Calidad: Alta (44.1kHz)</p>
+                      <p>• Cancelación de eco activada</p>
+                      <p>• Supresión de ruido activada</p>
+                      <p>• Control automático de ganancia</p>
+                    </div>
+                    <div className="sm:hidden">
+                      <p>• Calidad alta</p>
+                      <p>• Cancelación de eco</p>
+                    </div>
                   </div>
                 </div>
               )}
 
               {isRecording && (
-                <div className="space-y-4">
+                <div className="space-y-3 sm:space-y-4">
                   <div className="space-y-2">
-                    <div className="text-3xl font-mono text-red-600 bg-red-50 rounded-lg py-2 px-4 inline-block">
+                    <div className="text-xl sm:text-3xl font-mono text-red-600 bg-red-50 rounded-lg py-2 px-3 sm:px-4 inline-block">
                       {formatTime(recordingTime)}
                     </div>
-                    <p className="text-sm text-gray-600">Grabando...</p>
+                    <p className="text-xs sm:text-sm text-gray-600">Grabando...</p>
                   </div>
                   
                   <div className="flex justify-center space-x-4">
                     <button
                       type="button"
                       onClick={stopRecording}
-                      className="bg-gray-600 hover:bg-gray-700 text-white px-6 py-2 rounded-md font-medium transition-colors"
+                      className="bg-gray-600 hover:bg-gray-700 text-white px-4 sm:px-6 py-2 rounded-md font-medium transition-colors text-sm sm:text-base"
                     >
                       ⏹️ Detener
                     </button>
                   </div>
                   
                   <div className="flex justify-center items-center space-x-2">
-                    <div className="w-3 h-3 bg-red-600 rounded-full animate-pulse"></div>
-                    <div className="w-2 h-2 bg-red-400 rounded-full animate-pulse" style={{animationDelay: '0.2s'}}></div>
-                    <div className="w-2 h-2 bg-red-400 rounded-full animate-pulse" style={{animationDelay: '0.4s'}}></div>
+                    <div className="w-2 sm:w-3 h-2 sm:h-3 bg-red-600 rounded-full animate-pulse"></div>
+                    <div className="w-1.5 sm:w-2 h-1.5 sm:h-2 bg-red-400 rounded-full animate-pulse" style={{animationDelay: '0.2s'}}></div>
+                    <div className="w-1.5 sm:w-2 h-1.5 sm:h-2 bg-red-400 rounded-full animate-pulse" style={{animationDelay: '0.4s'}}></div>
                   </div>
                   
                   <div className="text-xs text-gray-500">
                     <p>💡 Habla claramente cerca del micrófono</p>
-                    <p>🔇 Evita ruidos de fondo</p>
+                    <p className="hidden sm:block">🔇 Evita ruidos de fondo</p>
                   </div>
                 </div>
               )}
@@ -759,11 +856,11 @@ const NewTranscription = () => {
         )}
 
         {/* Submit Button */}
-        <div className="flex justify-end">
+        <div className="flex justify-center sm:justify-end">
           <button
             type="submit"
             disabled={loading || !transcriptionData.audioFile || !transcriptionData.title.trim()}
-            className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white px-8 py-3 rounded-md font-medium transition-colors"
+            className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white px-6 sm:px-8 py-2 sm:py-3 rounded-md font-medium transition-colors text-sm sm:text-base w-full sm:w-auto"
           >
             {loading ? 'Procesando...' : 'Crear Transcripción'}
           </button>
@@ -772,11 +869,11 @@ const NewTranscription = () => {
 
 
       {/* AI Service Info */}
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+        <div className="bg-green-50 border border-green-200 rounded-lg p-3 sm:p-4">
           <div className="flex items-center space-x-2">
-            <span className="text-2xl">🤖</span>
+            <span className="text-xl sm:text-2xl">🤖</span>
             <div>
-              <h3 className="text-sm font-semibold text-green-800">IA Activada</h3>
+              <h3 className="text-xs sm:text-sm font-semibold text-green-800">IA Activada</h3>
               <p className="text-xs text-green-700">
                 Usando AssemblyAI - Alta precisión y velocidad.
               </p>
