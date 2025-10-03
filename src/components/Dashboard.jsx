@@ -111,7 +111,7 @@ const Dashboard = () => {
         </svg>
       ),
       color: 'bg-green-500 hover:bg-green-600',
-      route: '/dashboard/image-transcription'
+      route: '/dashboard/ocr'
     },
     {
       title: 'Resumen de Textos',

@@ -9,6 +9,7 @@ import TranscriptionViewPage from './components/TranscriptionViewPage'
 import SubscriptionPlans from './components/SubscriptionPlans'
 import CheckoutPage from './components/CheckoutPage'
 import UsageDisplay from './components/UsageDisplay'
+import ImageTextExtractor from './components/ImageTextExtractor'
 import Login from './components/Login'
 import Register from './components/Register'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -83,6 +84,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <UsageDisplay />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/dashboard/ocr" 
+              element={
+                <ProtectedRoute>
+                  <ImageTextExtractor />
                 </ProtectedRoute>
               } 
             />
