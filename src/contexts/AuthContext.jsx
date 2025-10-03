@@ -9,63 +9,44 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    let mounted = true
-
-    // Obtener sesión inicial
+    // Obtener sesión inicial de forma simple
     const getInitialSession = async () => {
       try {
-        console.log('🔍 Obteniendo sesión inicial...')
-        const { data: { session }, error } = await supabase.auth.getSession()
-        
-        if (error) {
-          console.error('❌ Error obteniendo sesión inicial:', error)
-        }
-        
-        if (mounted) {
-          console.log('📋 Sesión inicial obtenida:', session?.user?.email || 'No hay usuario')
-          setSession(session)
-          setUser(session?.user ?? null)
-          setLoading(false)
-        }
+        const { data: { session } } = await supabase.auth.getSession()
+        setSession(session)
+        setUser(session?.user ?? null)
       } catch (error) {
-        console.error('💥 Error en getInitialSession:', error)
-        if (mounted) {
-          setLoading(false)
-        }
+        console.error('Error obteniendo sesión:', error)
+        setSession(null)
+        setUser(null)
+      } finally {
+        setLoading(false)
       }
     }
 
     getInitialSession()
 
-    // Escuchar cambios de autenticación
+    // Escuchar cambios de autenticación de forma simple
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        console.log('🔄 Auth state changed:', event, session?.user?.email)
+        setSession(session)
+        setUser(session?.user ?? null)
+        setLoading(false)
         
-        if (mounted) {
-          setSession(session)
-          setUser(session?.user ?? null)
-          
-          // Si es un nuevo usuario (registro o primer login con Google), guardarlo en la base de datos
-          if (event === 'SIGNED_IN' && session?.user) {
-            await saveUserToDatabase(session.user)
-          }
-          
-          // Manejar específicamente el evento de logout
-          if (event === 'SIGNED_OUT') {
-            console.log('🚪 Usuario desconectado, limpiando estado...')
-            setSession(null)
-            setUser(null)
-          }
-          
-          // Solo establecer loading false si no estamos en medio de una operación manual
-          setLoading(false)
+        // Si es un nuevo usuario, guardarlo en la base de datos
+        if (event === 'SIGNED_IN' && session?.user) {
+          await saveUserToDatabase(session.user)
+        }
+        
+        // Manejar específicamente el evento de logout
+        if (event === 'SIGNED_OUT') {
+          setSession(null)
+          setUser(null)
         }
       }
     )
 
     return () => {
-      mounted = false
       subscription.unsubscribe()
     }
   }, [])

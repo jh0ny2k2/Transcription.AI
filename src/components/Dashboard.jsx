@@ -14,85 +14,63 @@ const Dashboard = () => {
   })
   const [currentSubscription, setCurrentSubscription] = useState(null)
   const [currentTime, setCurrentTime] = useState(new Date())
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('') 
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    // Solo cargar stats si el usuario está autenticado y no estamos cargando auth
-    if (!authLoading && user?.id) {
-      loadStats()
-    } else if (!authLoading && !user) {
-      // Si no hay usuario y no estamos cargando, redirigir al login
-      navigate('/login')
-    }
-
     // Actualizar la hora cada minuto
     const timer = setInterval(() => {
       setCurrentTime(new Date())
     }, 60000)
 
-    return () => clearInterval(timer)
-  }, [user?.id, authLoading, navigate]) // Solo depender del ID del usuario, no del objeto completo
+    // Cargar stats de forma simple y no bloqueante
+    if (user?.id) {
+      loadStats()
+    }
+
+    return () => {
+      clearInterval(timer)
+    }
+  }, [user?.id])
 
   const loadStats = async () => {
     if (!user?.id) return
 
     try {
-      setLoading(true)
-      setError('')
-
-      // Cargar datos en paralelo
-      const [transcriptionsResult, subscriptionResult] = await Promise.all([
-        // Obtener todas las transcripciones del usuario
-        supabase
-          .from('transcriptions')
-          .select('processing_time, created_at, status')
-          .eq('user_id', user.id),
-        
-        // Obtener suscripción actual
-        SubscriptionService.getCurrentPlan(user.id)
-      ])
-
-      const { data: transcriptions, error: fetchError } = transcriptionsResult
+      // Obtener transcripciones del usuario de forma simple
+      const { data: transcriptions } = await supabase
+        .from('transcriptions')
+        .select('processing_time, created_at')
+        .eq('user_id', user.id)
       
-      if (fetchError) {
-        throw new Error(fetchError.message)
+      if (transcriptions) {
+        const totalTranscriptions = transcriptions.length
+        const totalProcessingMinutes = Math.round(
+          transcriptions.reduce((total, t) => total + (t.processing_time || 0), 0) / 60
+        )
+        
+        const currentDate = new Date()
+        const thisMonth = transcriptions.filter(t => {
+          const transcriptionDate = new Date(t.created_at)
+          return transcriptionDate.getMonth() === currentDate.getMonth() && 
+                 transcriptionDate.getFullYear() === currentDate.getFullYear()
+        }).length
+
+        setStats({
+          totalTranscriptions,
+          totalDuration: totalProcessingMinutes,
+          thisMonth
+        })
       }
 
-      // Calcular estadísticas
-      const totalTranscriptions = transcriptions?.length || 0
-      
-      // Calcular tiempo total de procesamiento en minutos (convertir de segundos)
-      const totalProcessingTime = transcriptions?.reduce((total, t) => {
-        return total + (t.processing_time || 0)
-      }, 0) || 0
-      const totalProcessingMinutes = Math.round(totalProcessingTime / 60)
-
-      // Calcular transcripciones de este mes
-      const currentDate = new Date()
-      const currentMonth = currentDate.getMonth()
-      const currentYear = currentDate.getFullYear()
-      
-      const thisMonth = transcriptions?.filter(t => {
-        const transcriptionDate = new Date(t.created_at)
-        return transcriptionDate.getMonth() === currentMonth && 
-               transcriptionDate.getFullYear() === currentYear
-      }).length || 0
-
-      setStats({
-        totalTranscriptions,
-        totalDuration: totalProcessingMinutes,
-        thisMonth
-      })
-
-      // Establecer suscripción actual
-      setCurrentSubscription(subscriptionResult)
+      // Cargar suscripción de forma no bloqueante
+      SubscriptionService.getCurrentPlan(user.id)
+        .then(subscription => setCurrentSubscription(subscription))
+        .catch(() => {}) // Ignorar errores de suscripción
 
     } catch (err) {
-      setError('Error al cargar las estadísticas: ' + err.message)
-      console.error('Error loading stats:', err)
-    } finally {
-      setLoading(false)
+      console.warn('Error loading stats:', err)
+      // No mostrar error al usuario, solo usar valores por defecto
     }
   }
 
@@ -111,29 +89,45 @@ const Dashboard = () => {
     return '¡Buenas noches!'
   }
 
-  const navigationCards = [
+  // Servicios de Transcripción
+  const transcriptionServices = [
     {
-      title: 'Historial de Transcripciones',
-      description: 'Ver y gestionar todas tus transcripciones',
+      title: 'Transcripción de Audio',
+      description: 'Convierte archivos de audio a texto con alta precisión',
+      icon: (
+        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+        </svg>
+      ),
+      color: 'bg-blue-500 hover:bg-blue-600',
+      route: '/dashboard/new'
+    },
+    {
+      title: 'Extracción de Texto',
+      description: 'Extrae y transcribe texto de imágenes y documentos',
+      icon: (
+        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+      ),
+      color: 'bg-green-500 hover:bg-green-600',
+      route: '/dashboard/image-transcription'
+    },
+    {
+      title: 'Resumen de Textos',
+      description: 'Genera resúmenes automáticos de textos largos',
       icon: (
         <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
       ),
-      color: 'bg-blue-500 hover:bg-blue-600',
-      route: '/dashboard/history'
-    },
-    {
-      title: 'Nueva Transcripción',
-      description: 'Crear una nueva transcripción de audio',
-      icon: (
-        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-        </svg>
-      ),
-      color: 'bg-green-500 hover:bg-green-600',
-      route: '/dashboard/new'
-    },
+      color: 'bg-purple-500 hover:bg-purple-600',
+      route: '/dashboard/text-summary'
+    }
+  ]
+
+  // Gestión de Cuenta
+  const accountManagement = [
     {
       title: 'Perfil y Configuración',
       description: 'Gestionar tu perfil y preferencias',
@@ -142,7 +136,7 @@ const Dashboard = () => {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
         </svg>
       ),
-      color: 'bg-purple-500 hover:bg-purple-600',
+      color: 'bg-indigo-500 hover:bg-indigo-600',
       route: '/dashboard/profile'
     },
     {
@@ -168,6 +162,18 @@ const Dashboard = () => {
       route: '/dashboard/usage'
     }
   ]
+
+  // Mostrar loading mientras se cargan los datos o la autenticación
+  if (authLoading || loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+          <p className="text-gray-600 text-lg">Cargando dashboard...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
@@ -361,7 +367,7 @@ const Dashboard = () => {
         <div className="mb-6 sm:mb-8">
           <h3 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4 sm:mb-6">Acciones Rápidas</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-            {navigationCards.map((card, index) => (
+            {transcriptionServices.map((card, index) => (
               <div
                 key={index}
                 onClick={() => navigate(card.route)}
@@ -404,6 +410,198 @@ const Dashboard = () => {
                 <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/5 to-purple-500/5 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"></div>
               </div>
             ))}
+          </div>
+        </div>
+
+        {/* Servicios de Transcripción */}
+        <div className="mb-8 sm:mb-12">
+          <div className="flex items-center mb-4 sm:mb-6">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gradient-to-r from-blue-500 to-purple-600 rounded-xl flex items-center justify-center mr-3">
+              <svg className="w-4 h-4 sm:w-5 sm:h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+              </svg>
+            </div>
+            <h3 className="text-xl sm:text-2xl font-bold text-gray-900">Servicios de Transcripción</h3>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-6">
+            {transcriptionServices.map((card, index) => (
+              <div
+                key={index}
+                onClick={() => navigate(card.route)}
+                className="group bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-500 cursor-pointer p-4 sm:p-6 border border-white/30 hover:border-white/50 transform hover:scale-105 hover:-translate-y-2"
+              >
+                <div className="flex flex-col h-full">
+                  <div className="flex items-center mb-4 sm:mb-6">
+                    <div className={`w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center ${card.color} shadow-lg group-hover:shadow-xl transition-all duration-300 group-hover:scale-110`}>
+                      {card.icon}
+                    </div>
+                    <div className="ml-3 sm:ml-4">
+                      <h3 className="text-lg sm:text-xl font-bold text-gray-900 group-hover:text-indigo-600 transition-colors duration-300">
+                        {card.title}
+                      </h3>
+                    </div>
+                  </div>
+                  
+                  <p className="text-gray-600 text-xs sm:text-sm mb-4 sm:mb-6 flex-grow leading-relaxed">
+                    {card.description}
+                  </p>
+                  
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center text-indigo-600 text-xs sm:text-sm font-semibold group-hover:text-indigo-700 transition-colors duration-300">
+                      <span>Comenzar</span>
+                      <svg className="ml-1 sm:ml-2 w-3 h-3 sm:w-4 sm:h-4 transform group-hover:translate-x-1 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </div>
+                    
+                    {/* Decorative element */}
+                    <div className="w-6 h-6 sm:w-8 sm:h-8 bg-gradient-to-r from-indigo-100 to-purple-100 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 transform scale-0 group-hover:scale-100">
+                      <svg className="w-3 h-3 sm:w-4 sm:h-4 text-indigo-600" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Historial de Transcripciones */}
+          <div className="bg-white/50 backdrop-blur-sm rounded-2xl shadow-lg p-4 sm:p-6 border border-white/30">
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-lg sm:text-xl font-bold text-gray-900">Actividad Reciente</h4>
+              <button
+                onClick={() => navigate('/dashboard/history')}
+                className="text-indigo-600 hover:text-indigo-700 text-sm font-medium flex items-center space-x-1 transition-colors duration-300"
+              >
+                <span>Ver todo</span>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="text-center p-4 bg-blue-50 rounded-xl">
+                <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center mx-auto mb-2">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                </div>
+                <p className="text-sm font-medium text-gray-900">Audios</p>
+                <p className="text-xs text-gray-600">{stats.totalTranscriptions} transcripciones</p>
+              </div>
+              <div className="text-center p-4 bg-green-50 rounded-xl">
+                <div className="w-8 h-8 bg-green-500 rounded-lg flex items-center justify-center mx-auto mb-2">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                </div>
+                <p className="text-sm font-medium text-gray-900">Imágenes</p>
+                <p className="text-xs text-gray-600">0 extracciones</p>
+              </div>
+              <div className="text-center p-4 bg-purple-50 rounded-xl">
+                <div className="w-8 h-8 bg-purple-500 rounded-lg flex items-center justify-center mx-auto mb-2">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <p className="text-sm font-medium text-gray-900">Resúmenes</p>
+                <p className="text-xs text-gray-600">0 resúmenes</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Gestión de Cuenta */}
+        <div className="mb-6 sm:mb-8">
+          <div className="flex items-center mb-4 sm:mb-6">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center mr-3">
+              <svg className="w-4 h-4 sm:w-5 sm:h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+            </div>
+            <h3 className="text-xl sm:text-2xl font-bold text-gray-900">Gestión de Cuenta</h3>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-6">
+            {accountManagement.map((card, index) => (
+              <div
+                key={index}
+                onClick={() => navigate(card.route)}
+                className="group bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-500 cursor-pointer p-4 sm:p-6 border border-white/30 hover:border-white/50 transform hover:scale-105 hover:-translate-y-2"
+              >
+                <div className="flex flex-col h-full">
+                  <div className="flex items-center mb-4 sm:mb-6">
+                    <div className={`w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center ${card.color} shadow-lg group-hover:shadow-xl transition-all duration-300 group-hover:scale-110`}>
+                      {card.icon}
+                    </div>
+                    <div className="ml-3 sm:ml-4">
+                      <h3 className="text-lg sm:text-xl font-bold text-gray-900 group-hover:text-indigo-600 transition-colors duration-300">
+                        {card.title}
+                      </h3>
+                    </div>
+                  </div>
+                  
+                  <p className="text-gray-600 text-xs sm:text-sm mb-4 sm:mb-6 flex-grow leading-relaxed">
+                    {card.description}
+                  </p>
+                  
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center text-indigo-600 text-xs sm:text-sm font-semibold group-hover:text-indigo-700 transition-colors duration-300">
+                      <span>Acceder</span>
+                      <svg className="ml-1 sm:ml-2 w-3 h-3 sm:w-4 sm:h-4 transform group-hover:translate-x-1 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </div>
+                    
+                    {/* Decorative element */}
+                    <div className="w-6 h-6 sm:w-8 sm:h-8 bg-gradient-to-r from-indigo-100 to-purple-100 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 transform scale-0 group-hover:scale-100">
+                      <svg className="w-3 h-3 sm:w-4 sm:h-4 text-indigo-600" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Resumen de Cuenta */}
+          <div className="bg-white/50 backdrop-blur-sm rounded-2xl shadow-lg p-4 sm:p-6 border border-white/30">
+            <h4 className="text-lg sm:text-xl font-bold text-gray-900 mb-4">Resumen de Cuenta</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="text-center p-4 bg-indigo-50 rounded-xl">
+                <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center mx-auto mb-2">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                </div>
+                <p className="text-sm font-medium text-gray-900">Plan Actual</p>
+                <p className="text-xs text-gray-600">{currentSubscription?.subscription_plans?.name || 'Free'}</p>
+              </div>
+              <div className="text-center p-4 bg-orange-50 rounded-xl">
+                <div className="w-8 h-8 bg-orange-500 rounded-lg flex items-center justify-center mx-auto mb-2">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <p className="text-sm font-medium text-gray-900">Facturación</p>
+                <p className="text-xs text-gray-600">
+                  {currentSubscription?.subscription_plans?.price > 0 
+                    ? `€${currentSubscription.subscription_plans.price}/mes`
+                    : 'Gratuito'
+                  }
+                </p>
+              </div>
+              <div className="text-center p-4 bg-teal-50 rounded-xl">
+                <div className="w-8 h-8 bg-teal-500 rounded-lg flex items-center justify-center mx-auto mb-2">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                </div>
+                <p className="text-sm font-medium text-gray-900">Uso Este Mes</p>
+                <p className="text-xs text-gray-600">{stats.thisMonth} transcripciones</p>
+              </div>
+            </div>
           </div>
         </div>
 
